@@ -1,26 +1,39 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.configservice.service;
 
+import com.ctrip.framework.apollo.biz.config.BizConfig;
+import com.ctrip.framework.apollo.biz.repository.AppNamespaceRepository;
+import com.ctrip.framework.apollo.common.entity.AppNamespace;
 import com.ctrip.framework.apollo.configservice.wrapper.CaseInsensitiveMapWrapper;
+import com.ctrip.framework.apollo.core.ConfigConsts;
+import com.ctrip.framework.apollo.core.utils.ApolloThreadFactory;
 import com.ctrip.framework.apollo.core.utils.StringUtils;
+import com.ctrip.framework.apollo.tracer.Tracer;
+import com.ctrip.framework.apollo.tracer.spi.Transaction;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-
-import com.ctrip.framework.apollo.biz.config.BizConfig;
-import com.ctrip.framework.apollo.biz.repository.AppNamespaceRepository;
-import com.ctrip.framework.apollo.common.entity.AppNamespace;
-import com.ctrip.framework.apollo.core.ConfigConsts;
-import com.ctrip.framework.apollo.core.utils.ApolloThreadFactory;
-import com.ctrip.framework.apollo.tracer.Tracer;
-import com.ctrip.framework.apollo.tracer.spi.Transaction;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
@@ -31,6 +44,7 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * @author Jason Song(song_s@ctrip.com)
@@ -40,11 +54,8 @@ public class AppNamespaceServiceWithCache implements InitializingBean {
   private static final Logger logger = LoggerFactory.getLogger(AppNamespaceServiceWithCache.class);
   private static final Joiner STRING_JOINER = Joiner.on(ConfigConsts.CLUSTER_NAMESPACE_SEPARATOR)
       .skipNulls();
-  @Autowired
-  private AppNamespaceRepository appNamespaceRepository;
-
-  @Autowired
-  private BizConfig bizConfig;
+  private final AppNamespaceRepository appNamespaceRepository;
+  private final BizConfig bizConfig;
 
   private int scanInterval;
   private TimeUnit scanIntervalTimeUnit;
@@ -62,7 +73,11 @@ public class AppNamespaceServiceWithCache implements InitializingBean {
   //store id -> AppNamespace
   private Map<Long, AppNamespace> appNamespaceIdCache;
 
-  public AppNamespaceServiceWithCache() {
+  public AppNamespaceServiceWithCache(
+      final AppNamespaceRepository appNamespaceRepository,
+      final BizConfig bizConfig) {
+    this.appNamespaceRepository = appNamespaceRepository;
+    this.bizConfig = bizConfig;
     initialize();
   }
 
@@ -180,7 +195,7 @@ public class AppNamespaceServiceWithCache implements InitializingBean {
 
   //for those updated or deleted app namespaces
   private void updateAndDeleteCache() {
-    List<Long> ids = Lists.newArrayList(appNamespaceIdCache.keySet());
+    List<Long> ids = appNamespaceIdCache.keySet().stream().sorted().collect(Collectors.toList());
     if (CollectionUtils.isEmpty(ids)) {
       return;
     }

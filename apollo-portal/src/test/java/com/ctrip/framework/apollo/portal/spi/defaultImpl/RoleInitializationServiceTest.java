@@ -1,7 +1,23 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.portal.spi.defaultImpl;
 
 import com.ctrip.framework.apollo.common.entity.App;
-import com.ctrip.framework.apollo.core.enums.Env;
+import com.ctrip.framework.apollo.portal.environment.Env;
 import com.ctrip.framework.apollo.portal.AbstractUnitTest;
 import com.ctrip.framework.apollo.portal.component.config.PortalConfig;
 import com.ctrip.framework.apollo.portal.constant.PermissionType;
@@ -20,9 +36,6 @@ import org.mockito.Mock;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anySetOf;
-import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.*;
 
 public class RoleInitializationServiceTest extends AbstractUnitTest {
@@ -51,7 +64,7 @@ public class RoleInitializationServiceTest extends AbstractUnitTest {
     roleInitializationService.initAppRoles(mockApp());
 
     verify(rolePermissionService, times(1)).findRoleByRoleName(RoleUtils.buildAppMasterRoleName(APP_ID));
-    verify(rolePermissionService, times(0)).assignRoleToUsers(anyString(), anySetOf(String.class), anyString());
+    verify(rolePermissionService, times(0)).assignRoleToUsers(anyString(), anySet(), anyString());
   }
 
   @Test
@@ -67,8 +80,8 @@ public class RoleInitializationServiceTest extends AbstractUnitTest {
     verify(rolePermissionService, times(7)).findRoleByRoleName(anyString());
     verify(rolePermissionService, times(1)).assignRoleToUsers(
         RoleUtils.buildAppMasterRoleName(APP_ID), Sets.newHashSet(CURRENT_USER), CURRENT_USER);
-    verify(rolePermissionService, times(6)).createPermission(any());
-    verify(rolePermissionService, times(7)).createRoleWithPermissions(any(), anySetOf(Long.class));
+    verify(rolePermissionService, times(7)).createPermission(any());
+    verify(rolePermissionService, times(8)).createRoleWithPermissions(any(), anySet());
   }
 
   @Test
@@ -86,7 +99,7 @@ public class RoleInitializationServiceTest extends AbstractUnitTest {
 
     verify(rolePermissionService, times(2)).findRoleByRoleName(anyString());
     verify(rolePermissionService, times(0)).createPermission(any());
-    verify(rolePermissionService, times(0)).createRoleWithPermissions(any(), anySetOf(Long.class));
+    verify(rolePermissionService, times(0)).createRoleWithPermissions(any(), anySet());
   }
 
   @Test
@@ -107,7 +120,7 @@ public class RoleInitializationServiceTest extends AbstractUnitTest {
 
     verify(rolePermissionService, times(2)).findRoleByRoleName(anyString());
     verify(rolePermissionService, times(2)).createPermission(any());
-    verify(rolePermissionService, times(2)).createRoleWithPermissions(any(), anySetOf(Long.class));
+    verify(rolePermissionService, times(2)).createRoleWithPermissions(any(), anySet());
   }
 
   @Test
@@ -128,7 +141,7 @@ public class RoleInitializationServiceTest extends AbstractUnitTest {
 
     verify(rolePermissionService, times(2)).findRoleByRoleName(anyString());
     verify(rolePermissionService, times(1)).createPermission(any());
-    verify(rolePermissionService, times(1)).createRoleWithPermissions(any(), anySetOf(Long.class));
+    verify(rolePermissionService, times(1)).createRoleWithPermissions(any(), anySet());
   }
 
   private App mockApp(){

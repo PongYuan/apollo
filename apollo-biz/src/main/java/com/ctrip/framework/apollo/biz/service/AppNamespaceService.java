@@ -1,8 +1,23 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.service;
 
-import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
-
+import com.ctrip.framework.apollo.audit.annotation.ApolloAuditLog;
+import com.ctrip.framework.apollo.audit.annotation.OpType;
 import com.ctrip.framework.apollo.biz.entity.Audit;
 import com.ctrip.framework.apollo.biz.entity.Cluster;
 import com.ctrip.framework.apollo.biz.entity.Namespace;
@@ -13,10 +28,11 @@ import com.ctrip.framework.apollo.common.utils.BeanUtils;
 import com.ctrip.framework.apollo.core.ConfigConsts;
 import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
 import com.ctrip.framework.apollo.core.utils.StringUtils;
-
+import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,14 +46,21 @@ public class AppNamespaceService {
 
   private static final Logger logger = LoggerFactory.getLogger(AppNamespaceService.class);
 
-  @Autowired
-  private AppNamespaceRepository appNamespaceRepository;
-  @Autowired
-  private NamespaceService namespaceService;
-  @Autowired
-  private ClusterService clusterService;
-  @Autowired
-  private AuditService auditService;
+  private final AppNamespaceRepository appNamespaceRepository;
+  private final NamespaceService namespaceService;
+  private final ClusterService clusterService;
+  private final AuditService auditService;
+
+  public AppNamespaceService(
+      final AppNamespaceRepository appNamespaceRepository,
+      final @Lazy NamespaceService namespaceService,
+      final @Lazy ClusterService clusterService,
+      final AuditService auditService) {
+    this.appNamespaceRepository = appNamespaceRepository;
+    this.namespaceService = namespaceService;
+    this.clusterService = clusterService;
+    this.auditService = auditService;
+  }
 
   public boolean isAppNamespaceNameUnique(String appId, String namespaceName) {
     Objects.requireNonNull(appId, "AppId must not be null");
@@ -51,7 +74,7 @@ public class AppNamespaceService {
   }
 
   public List<AppNamespace> findByAppId(String appId) {
-    return appNamespaceRepository.findByAppId(appId);
+    return appNamespaceRepository.findByAppIdOrderByIdAsc(appId);
   }
 
   public List<AppNamespace> findPublicNamespacesByNames(Set<String> namespaceNames) {
@@ -81,6 +104,7 @@ public class AppNamespaceService {
   }
 
   @Transactional
+  @ApolloAuditLog(type = OpType.CREATE, name = "AppNamespace.createDefault")
   public void createDefaultAppNamespace(String appId, String createBy) {
     if (!isAppNamespaceNameUnique(appId, ConfigConsts.NAMESPACE_APPLICATION)) {
       throw new ServiceException("appnamespace not unique");
@@ -110,7 +134,7 @@ public class AppNamespaceService {
 
     appNamespace = appNamespaceRepository.save(appNamespace);
 
-    instanceOfAppNamespaceInAllCluster(appNamespace.getAppId(), appNamespace.getName(), createBy);
+    createNamespaceForAppNamespaceInAllCluster(appNamespace.getAppId(), appNamespace.getName(), createBy);
 
     auditService.audit(AppNamespace.class.getSimpleName(), appNamespace.getId(), Audit.OP.INSERT, createBy);
     return appNamespace;
@@ -127,7 +151,7 @@ public class AppNamespaceService {
     return managedNs;
   }
 
-  private void instanceOfAppNamespaceInAllCluster(String appId, String namespaceName, String createBy) {
+  public void createNamespaceForAppNamespaceInAllCluster(String appId, String namespaceName, String createBy) {
     List<Cluster> clusters = clusterService.findParentClusters(appId);
 
     for (Cluster cluster : clusters) {

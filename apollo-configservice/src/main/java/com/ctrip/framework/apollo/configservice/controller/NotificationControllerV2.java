@@ -1,22 +1,27 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.configservice.controller;
-
-import com.google.common.base.Function;
-import com.google.common.base.Splitter;
-import com.google.common.base.Strings;
-import com.google.common.collect.HashMultimap;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Multimap;
-import com.google.common.collect.Multimaps;
-import com.google.common.collect.Sets;
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 
 import com.ctrip.framework.apollo.biz.config.BizConfig;
 import com.ctrip.framework.apollo.biz.entity.ReleaseMessage;
 import com.ctrip.framework.apollo.biz.message.ReleaseMessageListener;
 import com.ctrip.framework.apollo.biz.message.Topics;
 import com.ctrip.framework.apollo.biz.utils.EntityManagerUtil;
+import com.ctrip.framework.apollo.biz.utils.ReleaseMessageKeyGenerator;
 import com.ctrip.framework.apollo.common.exception.BadRequestException;
 import com.ctrip.framework.apollo.configservice.service.ReleaseMessageServiceWithCache;
 import com.ctrip.framework.apollo.configservice.util.NamespaceUtil;
@@ -26,14 +31,23 @@ import com.ctrip.framework.apollo.core.ConfigConsts;
 import com.ctrip.framework.apollo.core.dto.ApolloConfigNotification;
 import com.ctrip.framework.apollo.core.utils.ApolloThreadFactory;
 import com.ctrip.framework.apollo.tracer.Tracer;
-
+import com.google.common.base.Strings;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Multimaps;
+import com.google.common.collect.Ordering;
+import com.google.common.collect.Sets;
+import com.google.common.collect.TreeMultimap;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.CollectionUtils;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.DeferredResult;
@@ -47,6 +61,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /**
  * @author Jason Song(song_s@ctrip.com)
@@ -56,39 +71,39 @@ import java.util.concurrent.TimeUnit;
 public class NotificationControllerV2 implements ReleaseMessageListener {
   private static final Logger logger = LoggerFactory.getLogger(NotificationControllerV2.class);
   private final Multimap<String, DeferredResultWrapper> deferredResults =
-      Multimaps.synchronizedSetMultimap(HashMultimap.create());
-  private static final Splitter STRING_SPLITTER =
-      Splitter.on(ConfigConsts.CLUSTER_NAMESPACE_SEPARATOR).omitEmptyStrings();
+      Multimaps.synchronizedSetMultimap(TreeMultimap.create(String.CASE_INSENSITIVE_ORDER, Ordering.natural()));
+
   private static final Type notificationsTypeReference =
       new TypeToken<List<ApolloConfigNotification>>() {
       }.getType();
 
   private final ExecutorService largeNotificationBatchExecutorService;
 
-  @Autowired
-  private WatchKeysUtil watchKeysUtil;
+  private final WatchKeysUtil watchKeysUtil;
+  private final ReleaseMessageServiceWithCache releaseMessageService;
+  private final EntityManagerUtil entityManagerUtil;
+  private final NamespaceUtil namespaceUtil;
+  private final Gson gson;
+  private final BizConfig bizConfig;
 
-  @Autowired
-  private ReleaseMessageServiceWithCache releaseMessageService;
-
-  @Autowired
-  private EntityManagerUtil entityManagerUtil;
-
-  @Autowired
-  private NamespaceUtil namespaceUtil;
-
-  @Autowired
-  private Gson gson;
-
-  @Autowired
-  private BizConfig bizConfig;
-
-  public NotificationControllerV2() {
+  public NotificationControllerV2(
+      final WatchKeysUtil watchKeysUtil,
+      final ReleaseMessageServiceWithCache releaseMessageService,
+      final EntityManagerUtil entityManagerUtil,
+      final NamespaceUtil namespaceUtil,
+      final Gson gson,
+      final BizConfig bizConfig) {
     largeNotificationBatchExecutorService = Executors.newSingleThreadExecutor(ApolloThreadFactory.create
         ("NotificationControllerV2", true));
+    this.watchKeysUtil = watchKeysUtil;
+    this.releaseMessageService = releaseMessageService;
+    this.entityManagerUtil = entityManagerUtil;
+    this.namespaceUtil = namespaceUtil;
+    this.gson = gson;
+    this.bizConfig = bizConfig;
   }
 
-  @RequestMapping(method = RequestMethod.GET)
+  @GetMapping
   public DeferredResult<ResponseEntity<List<ApolloConfigNotification>>> pollNotification(
       @RequestParam(value = "appId") String appId,
       @RequestParam(value = "cluster") String cluster,
@@ -105,13 +120,18 @@ public class NotificationControllerV2 implements ReleaseMessageListener {
     }
 
     if (CollectionUtils.isEmpty(notifications)) {
-      throw new BadRequestException("Invalid format of notifications: " + notificationsAsString);
+      throw BadRequestException.invalidNotificationsFormat(notificationsAsString);
     }
 
-    DeferredResultWrapper deferredResultWrapper = new DeferredResultWrapper();
-    Set<String> namespaces = Sets.newHashSet();
-    Map<String, Long> clientSideNotifications = Maps.newHashMap();
     Map<String, ApolloConfigNotification> filteredNotifications = filterNotifications(appId, notifications);
+
+    if (CollectionUtils.isEmpty(filteredNotifications)) {
+      throw BadRequestException.invalidNotificationsFormat(notificationsAsString);
+    }
+
+    DeferredResultWrapper deferredResultWrapper = new DeferredResultWrapper(bizConfig.longPollingTimeoutInMilli());
+    Set<String> namespaces = Sets.newHashSetWithExpectedSize(filteredNotifications.size());
+    Map<String, Long> clientSideNotifications = Maps.newHashMapWithExpectedSize(filteredNotifications.size());
 
     for (Map.Entry<String, ApolloConfigNotification> notificationEntry : filteredNotifications.entrySet()) {
       String normalizedNamespace = notificationEntry.getKey();
@@ -123,15 +143,39 @@ public class NotificationControllerV2 implements ReleaseMessageListener {
       }
     }
 
-    if (CollectionUtils.isEmpty(namespaces)) {
-      throw new BadRequestException("Invalid format of notifications: " + notificationsAsString);
-    }
-
     Multimap<String, String> watchedKeysMap =
         watchKeysUtil.assembleAllWatchKeys(appId, cluster, namespaces, dataCenter);
 
     Set<String> watchedKeys = Sets.newHashSet(watchedKeysMap.values());
 
+    /**
+     * 1、set deferredResult before the check, for avoid more waiting
+     * If the check before setting deferredResult,it may receive a notification the next time
+     * when method handleMessage is executed between check and set deferredResult.
+     */
+    deferredResultWrapper
+          .onTimeout(() -> logWatchedKeys(watchedKeys, "Apollo.LongPoll.TimeOutKeys"));
+
+    deferredResultWrapper.onCompletion(() -> {
+      //unregister all keys
+      for (String key : watchedKeys) {
+        deferredResults.remove(key, deferredResultWrapper);
+      }
+      logWatchedKeys(watchedKeys, "Apollo.LongPoll.CompletedKeys");
+    });
+
+    //register all keys
+    for (String key : watchedKeys) {
+      this.deferredResults.put(key, deferredResultWrapper);
+    }
+
+    logWatchedKeys(watchedKeys, "Apollo.LongPoll.RegisteredKeys");
+    logger.debug("Listening {} from appId: {}, cluster: {}, namespace: {}, datacenter: {}",
+        watchedKeys, appId, cluster, namespaces, dataCenter);
+
+    /**
+     * 2、check new release
+     */
     List<ReleaseMessage> latestReleaseMessages =
         releaseMessageService.findLatestReleaseMessagesGroupByMessages(watchedKeys);
 
@@ -149,26 +193,6 @@ public class NotificationControllerV2 implements ReleaseMessageListener {
 
     if (!CollectionUtils.isEmpty(newNotifications)) {
       deferredResultWrapper.setResult(newNotifications);
-    } else {
-      deferredResultWrapper
-          .onTimeout(() -> logWatchedKeys(watchedKeys, "Apollo.LongPoll.TimeOutKeys"));
-
-      deferredResultWrapper.onCompletion(() -> {
-        //unregister all keys
-        for (String key : watchedKeys) {
-          deferredResults.remove(key, deferredResultWrapper);
-        }
-        logWatchedKeys(watchedKeys, "Apollo.LongPoll.CompletedKeys");
-      });
-
-      //register all keys
-      for (String key : watchedKeys) {
-        this.deferredResults.put(key, deferredResultWrapper);
-      }
-
-      logWatchedKeys(watchedKeys, "Apollo.LongPoll.RegisteredKeys");
-      logger.debug("Listening {} from appId: {}, cluster: {}, namespace: {}, datacenter: {}",
-          watchedKeys, appId, cluster, namespaces, dataCenter);
     }
 
     return deferredResultWrapper.getResult();
@@ -293,10 +317,8 @@ public class NotificationControllerV2 implements ReleaseMessageListener {
         if (Strings.isNullOrEmpty(releaseMessage)) {
           return null;
         }
-        List<String> keys = STRING_SPLITTER.splitToList(releaseMessage);
-        //message should be appId+cluster+namespace
-        if (keys.size() != 3) {
-          logger.error("message format invalid - {}", releaseMessage);
+        List<String> keys = ReleaseMessageKeyGenerator.messageToList(releaseMessage);
+        if (CollectionUtils.isEmpty(keys)) {
           return null;
         }
         return keys.get(2);
@@ -308,4 +330,3 @@ public class NotificationControllerV2 implements ReleaseMessageListener {
     }
   }
 }
-

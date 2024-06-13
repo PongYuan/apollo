@@ -1,10 +1,25 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.portal.spi.configuration;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.core.env.Environment;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
-
 import java.util.HashMap;
 import java.util.Map;
 
@@ -44,11 +59,14 @@ public class LdapProperties {
   private boolean anonymousReadOnly;
 
   /**
+   * User search filter
+   */
+  private String searchFilter;
+
+  /**
    * LDAP specification settings.
    */
   private final Map<String, String> baseEnvironment = new HashMap<>();
-
-  private String userDnPatterns;
 
   public String[] getUrls() {
     return this.urls;
@@ -90,12 +108,12 @@ public class LdapProperties {
     this.anonymousReadOnly = anonymousReadOnly;
   }
 
-  public String getUserDnPatterns() {
-    return userDnPatterns;
+  public String getSearchFilter() {
+    return searchFilter;
   }
 
-  public void setUserDnPatterns(String userDnPatterns) {
-    this.userDnPatterns = userDnPatterns;
+  public void setSearchFilter(String searchFilter) {
+    this.searchFilter = searchFilter;
   }
 
   public Map<String, String> getBaseEnvironment() {
@@ -113,7 +131,7 @@ public class LdapProperties {
     Assert.notNull(environment, "Environment must not be null");
     String localPort = environment.getProperty("local.ldap.port");
     if (localPort != null) {
-      return Integer.valueOf(localPort);
+      return Integer.parseInt(localPort);
     }
     return DEFAULT_PORT;
   }

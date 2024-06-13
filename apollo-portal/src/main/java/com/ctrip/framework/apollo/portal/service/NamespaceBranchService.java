@@ -1,3 +1,19 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.portal.service;
 
 import com.ctrip.framework.apollo.common.dto.GrayReleaseRuleDTO;
@@ -6,15 +22,13 @@ import com.ctrip.framework.apollo.common.dto.ItemDTO;
 import com.ctrip.framework.apollo.common.dto.NamespaceDTO;
 import com.ctrip.framework.apollo.common.dto.ReleaseDTO;
 import com.ctrip.framework.apollo.common.exception.BadRequestException;
-import com.ctrip.framework.apollo.core.enums.Env;
+import com.ctrip.framework.apollo.portal.environment.Env;
 import com.ctrip.framework.apollo.portal.api.AdminServiceAPI;
 import com.ctrip.framework.apollo.portal.component.ItemsComparator;
 import com.ctrip.framework.apollo.portal.constant.TracerEventType;
 import com.ctrip.framework.apollo.portal.entity.bo.NamespaceBO;
 import com.ctrip.framework.apollo.portal.spi.UserInfoHolder;
 import com.ctrip.framework.apollo.tracer.Tracer;
-
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,18 +38,27 @@ import java.util.List;
 @Service
 public class NamespaceBranchService {
 
-  @Autowired
-  private ItemsComparator itemsComparator;
-  @Autowired
-  private UserInfoHolder userInfoHolder;
-  @Autowired
-  private NamespaceService namespaceService;
-  @Autowired
-  private ItemService itemService;
-  @Autowired
-  private AdminServiceAPI.NamespaceBranchAPI namespaceBranchAPI;
-  @Autowired
-  private ReleaseService releaseService;
+  private final ItemsComparator itemsComparator;
+  private final UserInfoHolder userInfoHolder;
+  private final NamespaceService namespaceService;
+  private final ItemService itemService;
+  private final AdminServiceAPI.NamespaceBranchAPI namespaceBranchAPI;
+  private final ReleaseService releaseService;
+
+  public NamespaceBranchService(
+      final ItemsComparator itemsComparator,
+      final UserInfoHolder userInfoHolder,
+      final NamespaceService namespaceService,
+      final ItemService itemService,
+      final AdminServiceAPI.NamespaceBranchAPI namespaceBranchAPI,
+      final ReleaseService releaseService) {
+    this.itemsComparator = itemsComparator;
+    this.userInfoHolder = userInfoHolder;
+    this.namespaceService = namespaceService;
+    this.itemService = itemService;
+    this.namespaceBranchAPI = namespaceBranchAPI;
+    this.releaseService = releaseService;
+  }
 
 
   @Transactional
@@ -123,7 +146,7 @@ public class NamespaceBranchService {
     NamespaceBO parentNamespace = namespaceService.loadNamespaceBO(appId, env, clusterName, namespaceName);
 
     if (parentNamespace == null) {
-      throw new BadRequestException("base namespace not existed");
+      throw BadRequestException.namespaceNotExists(appId, clusterName, namespaceName);
     }
 
     if (parentNamespace.getItemModifiedCnt() > 0) {

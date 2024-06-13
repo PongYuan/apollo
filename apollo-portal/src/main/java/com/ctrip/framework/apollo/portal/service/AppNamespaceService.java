@@ -1,5 +1,26 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.portal.service;
 
+import com.ctrip.framework.apollo.audit.annotation.ApolloAuditLog;
+import com.ctrip.framework.apollo.audit.annotation.ApolloAuditLogDataInfluence;
+import com.ctrip.framework.apollo.audit.annotation.ApolloAuditLogDataInfluenceTable;
+import com.ctrip.framework.apollo.audit.annotation.ApolloAuditLogDataInfluenceTableField;
+import com.ctrip.framework.apollo.audit.annotation.OpType;
 import com.ctrip.framework.apollo.common.entity.App;
 import com.ctrip.framework.apollo.common.entity.AppNamespace;
 import com.ctrip.framework.apollo.common.exception.BadRequestException;
@@ -8,16 +29,15 @@ import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
 import com.ctrip.framework.apollo.core.utils.StringUtils;
 import com.ctrip.framework.apollo.portal.repository.AppNamespaceRepository;
 import com.ctrip.framework.apollo.portal.spi.UserInfoHolder;
-
 import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import java.util.Set;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
 @Service
@@ -26,16 +46,24 @@ public class AppNamespaceService {
   private static final int PRIVATE_APP_NAMESPACE_NOTIFICATION_COUNT = 5;
   private static final Joiner APP_NAMESPACE_JOINER = Joiner.on(",").skipNulls();
 
-  @Autowired
-  private UserInfoHolder userInfoHolder;
-  @Autowired
-  private AppNamespaceRepository appNamespaceRepository;
-  @Autowired
-  private RoleInitializationService roleInitializationService;
-  @Autowired
-  private AppService appService;
-  @Autowired
-  private RolePermissionService rolePermissionService;
+  private final UserInfoHolder userInfoHolder;
+  private final AppNamespaceRepository appNamespaceRepository;
+  private final RoleInitializationService roleInitializationService;
+  private final AppService appService;
+  private final RolePermissionService rolePermissionService;
+
+  public AppNamespaceService(
+      final UserInfoHolder userInfoHolder,
+      final AppNamespaceRepository appNamespaceRepository,
+      final RoleInitializationService roleInitializationService,
+      final @Lazy AppService appService,
+      final RolePermissionService rolePermissionService) {
+    this.userInfoHolder = userInfoHolder;
+    this.appNamespaceRepository = appNamespaceRepository;
+    this.roleInitializationService = roleInitializationService;
+    this.appService = appService;
+    this.rolePermissionService = rolePermissionService;
+  }
 
   /**
    * 公共的app ns,能被其它项目关联到的app ns
@@ -62,10 +90,20 @@ public class AppNamespaceService {
     return appNamespaceRepository.findByAppIdAndName(appId, namespaceName);
   }
 
+  public List<AppNamespace> findByAppId(String appId) {
+    return appNamespaceRepository.findByAppId(appId);
+  }
+
+  public List<AppNamespace> findAll() {
+    Iterable<AppNamespace> appNamespaces = appNamespaceRepository.findAll();
+    return Lists.newArrayList(appNamespaces);
+  }
+
+  @ApolloAuditLog(type = OpType.CREATE, name = "AppNamespace.create", description = "createDefaultAppNamespace")
   @Transactional
   public void createDefaultAppNamespace(String appId) {
     if (!isAppNamespaceNameUnique(appId, ConfigConsts.NAMESPACE_APPLICATION)) {
-      throw new BadRequestException(String.format("App already has application namespace. AppId = %s", appId));
+      throw new BadRequestException("App already has application namespace. AppId = %s", appId);
     }
 
     AppNamespace appNs = new AppNamespace();
@@ -86,18 +124,20 @@ public class AppNamespaceService {
     return Objects.isNull(appNamespaceRepository.findByAppIdAndName(appId, namespaceName));
   }
 
+  @Transactional
   public AppNamespace createAppNamespaceInLocal(AppNamespace appNamespace) {
     return createAppNamespaceInLocal(appNamespace, true);
   }
 
   @Transactional
+  @ApolloAuditLog(type = OpType.CREATE, name = "AppNamespace.create", description = "createAppNamespaceInLocal")
   public AppNamespace createAppNamespaceInLocal(AppNamespace appNamespace, boolean appendNamespacePrefix) {
     String appId = appNamespace.getAppId();
 
     //add app org id as prefix
     App app = appService.load(appId);
     if (app == null) {
-      throw new BadRequestException("App not exist. AppId = " + appId);
+      throw BadRequestException.appNotExists(appId);
     }
 
     StringBuilder appNamespaceName = new StringBuilder();
@@ -113,7 +153,7 @@ public class AppNamespaceService {
     }
 
     if (!ConfigFileFormat.isValidFormat(appNamespace.getFormat())) {
-     throw new BadRequestException("Invalid namespace format. format must be properties、json、yaml、yml、xml");
+     throw BadRequestException.invalidNamespaceFormat("format must be properties、json、yaml、yml、xml");
     }
 
     String operator = appNamespace.getDataChangeCreatedBy();
@@ -124,14 +164,16 @@ public class AppNamespaceService {
 
     appNamespace.setDataChangeLastModifiedBy(operator);
 
-    // globally uniqueness check
+    // globally uniqueness check for public app namespace
     if (appNamespace.isPublic()) {
       checkAppNamespaceGlobalUniqueness(appNamespace);
-    }
-
-    if (!appNamespace.isPublic() &&
-        appNamespaceRepository.findByAppIdAndName(appNamespace.getAppId(), appNamespace.getName()) != null) {
-      throw new BadRequestException("Private AppNamespace " + appNamespace.getName() + " already exists!");
+    } else {
+      // check private app namespace
+      if (appNamespaceRepository.findByAppIdAndName(appNamespace.getAppId(), appNamespace.getName()) != null) {
+        throw new BadRequestException("Private AppNamespace " + appNamespace.getName() + " already exists!");
+      }
+      // should not have the same with public app namespace
+      checkPublicAppNamespaceGlobalUniqueness(appNamespace);
     }
 
     AppNamespace createdAppNamespace = appNamespaceRepository.save(appNamespace);
@@ -142,11 +184,32 @@ public class AppNamespaceService {
     return createdAppNamespace;
   }
 
-  private void checkAppNamespaceGlobalUniqueness(AppNamespace appNamespace) {
-    AppNamespace publicAppNamespace = findPublicAppNamespace(appNamespace.getName());
-    if (publicAppNamespace != null) {
-      throw new BadRequestException("Public AppNamespace " + appNamespace.getName() + " already exists in appId: " + publicAppNamespace.getAppId() + "!");
+  @Transactional
+  public AppNamespace importAppNamespaceInLocal(AppNamespace appNamespace) {
+    // globally uniqueness check for public app namespace
+    if (appNamespace.isPublic()) {
+      checkAppNamespaceGlobalUniqueness(appNamespace);
+    } else {
+      // check private app namespace
+      if (appNamespaceRepository.findByAppIdAndName(appNamespace.getAppId(), appNamespace.getName()) != null) {
+        throw new BadRequestException("Private AppNamespace " + appNamespace.getName() + " already exists!");
+      }
+      // should not have the same with public app namespace
+      checkPublicAppNamespaceGlobalUniqueness(appNamespace);
     }
+
+    AppNamespace createdAppNamespace = appNamespaceRepository.save(appNamespace);
+
+    String operator = appNamespace.getDataChangeCreatedBy();
+
+    roleInitializationService.initNamespaceRoles(appNamespace.getAppId(), appNamespace.getName(), operator);
+    roleInitializationService.initNamespaceEnvRoles(appNamespace.getAppId(), appNamespace.getName(), operator);
+
+    return createdAppNamespace;
+  }
+
+  private void checkAppNamespaceGlobalUniqueness(AppNamespace appNamespace) {
+    checkPublicAppNamespaceGlobalUniqueness(appNamespace);
 
     List<AppNamespace> privateAppNamespaces = findAllPrivateAppNamespaces(appNamespace.getName());
 
@@ -165,13 +228,19 @@ public class AppNamespaceService {
     }
   }
 
+  private void checkPublicAppNamespaceGlobalUniqueness(AppNamespace appNamespace) {
+    AppNamespace publicAppNamespace = findPublicAppNamespace(appNamespace.getName());
+    if (publicAppNamespace != null) {
+      throw new BadRequestException("AppNamespace " + appNamespace.getName() + " already exists as public namespace in appId: " + publicAppNamespace.getAppId() + "!");
+    }
+  }
 
+  @ApolloAuditLog(type = OpType.DELETE, name = "AppNamespace.delete", description = "deleteAppNamespace")
   @Transactional
   public AppNamespace deleteAppNamespace(String appId, String namespaceName) {
     AppNamespace appNamespace = appNamespaceRepository.findByAppIdAndName(appId, namespaceName);
     if (appNamespace == null) {
-      throw new BadRequestException(
-          String.format("AppNamespace not exists. AppId = %s, NamespaceName = %s", appId, namespaceName));
+      throw BadRequestException.appNamespaceNotExists( appId, namespaceName);
     }
 
     String operator = userInfoHolder.getUser().getUserId();
@@ -188,7 +257,13 @@ public class AppNamespaceService {
     return appNamespace;
   }
 
-  public void batchDeleteByAppId(String appId, String operator) {
+  @ApolloAuditLog(type = OpType.DELETE, name = "AppNamespace.batchDeleteByAppId", description = "batchDeleteByAppId")
+  public void batchDeleteByAppId(
+      @ApolloAuditLogDataInfluence
+      @ApolloAuditLogDataInfluenceTable(tableName = "AppNamespace")
+      @ApolloAuditLogDataInfluenceTableField(fieldName = "AppId") String appId,
+      String operator) {
     appNamespaceRepository.batchDeleteByAppId(appId, operator);
   }
+
 }

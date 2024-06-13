@@ -1,7 +1,20 @@
+/*
+ * Copyright 2024 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.service;
-
-import com.google.common.collect.Maps;
-import com.google.gson.Gson;
 
 import com.ctrip.framework.apollo.biz.entity.Audit;
 import com.ctrip.framework.apollo.biz.entity.Cluster;
@@ -19,8 +32,11 @@ import com.ctrip.framework.apollo.common.exception.BadRequestException;
 import com.ctrip.framework.apollo.common.exception.ServiceException;
 import com.ctrip.framework.apollo.common.utils.BeanUtils;
 import com.ctrip.framework.apollo.core.ConfigConsts;
-
-import org.springframework.beans.factory.annotation.Autowired;
+import com.google.common.collect.Maps;
+import com.google.gson.Gson;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,32 +54,47 @@ import java.util.stream.Collectors;
 @Service
 public class NamespaceService {
 
-  private Gson gson = new Gson();
+  private static final Gson GSON = new Gson();
 
-  @Autowired
-  private NamespaceRepository namespaceRepository;
-  @Autowired
-  private AuditService auditService;
-  @Autowired
-  private AppNamespaceService appNamespaceService;
-  @Autowired
-  private ItemService itemService;
-  @Autowired
-  private CommitService commitService;
-  @Autowired
-  private ReleaseService releaseService;
-  @Autowired
-  private ClusterService clusterService;
-  @Autowired
-  private NamespaceBranchService namespaceBranchService;
-  @Autowired
-  private ReleaseHistoryService releaseHistoryService;
-  @Autowired
-  private NamespaceLockService namespaceLockService;
-  @Autowired
-  private InstanceService instanceService;
-  @Autowired
-  private MessageSender messageSender;
+  private final NamespaceRepository namespaceRepository;
+  private final AuditService auditService;
+  private final AppNamespaceService appNamespaceService;
+  private final ItemService itemService;
+  private final CommitService commitService;
+  private final ReleaseService releaseService;
+  private final ClusterService clusterService;
+  private final NamespaceBranchService namespaceBranchService;
+  private final ReleaseHistoryService releaseHistoryService;
+  private final NamespaceLockService namespaceLockService;
+  private final InstanceService instanceService;
+  private final MessageSender messageSender;
+
+  public NamespaceService(
+      final ReleaseHistoryService releaseHistoryService,
+      final NamespaceRepository namespaceRepository,
+      final AuditService auditService,
+      final @Lazy AppNamespaceService appNamespaceService,
+      final MessageSender messageSender,
+      final @Lazy ItemService itemService,
+      final CommitService commitService,
+      final @Lazy ReleaseService releaseService,
+      final @Lazy ClusterService clusterService,
+      final @Lazy NamespaceBranchService namespaceBranchService,
+      final NamespaceLockService namespaceLockService,
+      final InstanceService instanceService) {
+    this.releaseHistoryService = releaseHistoryService;
+    this.namespaceRepository = namespaceRepository;
+    this.auditService = auditService;
+    this.appNamespaceService = appNamespaceService;
+    this.messageSender = messageSender;
+    this.itemService = itemService;
+    this.commitService = commitService;
+    this.releaseService = releaseService;
+    this.clusterService = clusterService;
+    this.namespaceBranchService = namespaceBranchService;
+    this.namespaceLockService = namespaceLockService;
+    this.instanceService = instanceService;
+  }
 
 
   public Namespace findOne(Long namespaceId) {
@@ -75,10 +106,25 @@ public class NamespaceService {
                                                                          namespaceName);
   }
 
+  /**
+   * the returned content's size is not fixed. so please carefully used.
+   */
+  public Page<Namespace> findByItem(String itemKey, Pageable pageable) {
+    Page<Item> items = itemService.findItemsByKey(itemKey, pageable);
+
+    if (!items.hasContent()) {
+      return Page.empty();
+    }
+
+    Set<Long> namespaceIds = BeanUtils.toPropertySet("namespaceId", items.getContent());
+
+    return new PageImpl<>(namespaceRepository.findByIdIn(namespaceIds));
+  }
+
   public Namespace findPublicNamespaceForAssociatedNamespace(String clusterName, String namespaceName) {
     AppNamespace appNamespace = appNamespaceService.findPublicNamespaceByName(namespaceName);
     if (appNamespace == null) {
-      throw new BadRequestException("namespace not exist");
+      throw BadRequestException.namespaceNotExists("", clusterName, namespaceName);
     }
 
     String appId = appNamespace.getAppId();
@@ -346,7 +392,7 @@ public class NamespaceService {
   public Map<String, Boolean> namespacePublishInfo(String appId) {
     List<Cluster> clusters = clusterService.findParentClusters(appId);
     if (CollectionUtils.isEmpty(clusters)) {
-      throw new BadRequestException("app not exist");
+      throw BadRequestException.appNotExists(appId);
     }
 
     Map<String, Boolean> clusterHasNotPublishedItems = Maps.newHashMap();
@@ -387,7 +433,7 @@ public class NamespaceService {
       return false;
     }
 
-    Map<String, String> publishedConfiguration = gson.fromJson(latestRelease.getConfigurations(), GsonType.CONFIG);
+    Map<String, String> publishedConfiguration = GSON.fromJson(latestRelease.getConfigurations(), GsonType.CONFIG);
     for (Item item : itemsModifiedAfterLastPublish) {
       if (!Objects.equals(item.getValue(), publishedConfiguration.get(item.getKey()))) {
         return true;
